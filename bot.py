@@ -90,7 +90,7 @@ class AlchemyStrategy:
 
         dist_to_enemy = cls.get_distance(mx, my, ex, ey)
 
-        # Шаблон итогового ответа, чтобы всегда прокидывать апдейт памяти
+        # Шаблон ответа с автоматическим сохранением состояния приватной памяти
         def build_cmd(action: str, params: dict = None) -> dict:
             return {
                 "type": "command",
@@ -107,11 +107,11 @@ class AlchemyStrategy:
             return build_cmd("send_message", {"text": BLUFF_MESSAGES[msg_index]})
 
         # ==========================================
-        # ПРИОРИТЕТ 1: Уклонение (если враг не истощен)
+        # ПРИОРИТЕТ 1: Уклонение (если враг полон сил)
         # ==========================================
         if dist_to_enemy <= 2 and ehp > 30:
-            return build_cmd(cls.step_away(mx, my, ex, ey, width, height)["action"],
-                             cls.step_away(mx, my, ex, ey, width, height)["params"])
+            escape_move = cls.step_away(mx, my, ex, ey, width, height)
+            return build_cmd(escape_move["action"], escape_move["params"])
 
         # ==========================================
         # ПРИОРИТЕТ 2: Агрессия — кража (steal) у слабого врага
@@ -125,6 +125,7 @@ class AlchemyStrategy:
         # ПРИОРИТЕТ 3: Безопасность — утилизация обманок через ловушки
         # ==========================================
         if has_fake:
+            print(f"[{BOT_ID}] Обнаружена обманка! Сбрасываю её в ловушку.", flush=True)
             return build_cmd("set_trap", {"element_slot": fake_slots[0]})
 
         # ==========================================
@@ -140,30 +141,30 @@ class AlchemyStrategy:
                     # ПРОВЕРКА БОНУСА АЛХИМИКА: прошло ли 10 тиков без атак и краж?
                     ticks_since_aggression = current_tick - last_aggression_tick
                     if ticks_since_aggression < 10:
-                        print(f"[{BOT_ID}] Выжидаю Бонус Алхимика (прошло {ticks_since_aggression}/10 тиков). Пропуск.", flush=True)
+                        print(f"[{BOT_ID}] Выжидаю Бонус Алхимика (прошло {ticks_since_aggression}/10 тиков).", flush=True)
                         return build_cmd("wait")
 
-                    print(f"[{BOT_ID}] Сохраняю рецепт с активным Бонусом Алхимика (×1.5)!", flush=True)
+                    print(f"[{BOT_ID}] Сохраняем рецепт с мультипликатором ×1.5!", flush=True)
                     return build_cmd("save")
 
-                return build_cmd(cls.step_towards(mx, my, lab["x"], lab["y"])["action"],
-                                 cls.step_towards(mx, my, lab["x"], lab["y"])["params"])
+                move_cmd = cls.step_towards(mx, my, lab["x"], lab["y"])
+                return build_cmd(move_cmd["action"], move_cmd["params"])
 
         # ==========================================
         # ПРИОРИТЕТ 5: Саботаж котла Хаосом
         # ==========================================
         if has_chaos:
-            # Ищем ближайший незаблокированный котел
             free_cauldrons = [c for c in cells if c.get("type") == "cauldron" and not c.get("blocked", False)]
             if free_cauldrons:
                 closest_cauldron = min(free_cauldrons, key=lambda c: cls.get_distance(mx, my, c["x"], c["y"]))
                 dist_to_cauldron = cls.get_distance(mx, my, closest_cauldron["x"], closest_cauldron["y"])
 
                 if dist_to_cauldron == 0:
-                    print(f"[{BOT_ID}] Стою на котле. Активирую саботаж Хаосом block_cauldron!", flush=True)
+                    print(f"[{BOT_ID}] Саботирую котёл с помощью Хаоса!", flush=True)
                     return build_cmd("block_cauldron")
-                return build_cmd(cls.step_towards(mx, my, closest_cauldron["x"], closest_cauldron["y"])["action"],
-                                 cls.step_towards(mx, my, closest_cauldron["x"], closest_cauldron["y"])["params"])
+
+                move_cmd = cls.step_towards(mx, my, closest_cauldron["x"], closest_cauldron["y"])
+                return build_cmd(move_cmd["action"], move_cmd["params"])
 
         # ==========================================
         # ПРИОРИТЕТ 6: Сбор ресурсов (жилы и библиотеки)
@@ -174,8 +175,9 @@ class AlchemyStrategy:
                 closest_target = min(targets, key=lambda c: cls.get_distance(mx, my, c["x"], c["y"]))
                 if cls.get_distance(mx, my, closest_target["x"], closest_target["y"]) == 0:
                     return build_cmd("collect")
-                return build_cmd(cls.step_towards(mx, my, closest_target["x"], closest_target["y"])["action"],
-                                 cls.step_towards(mx, my, closest_target["x"], closest_target["y"])["params"])
+
+                move_cmd = cls.step_towards(mx, my, closest_target["x"], closest_target["y"])
+                return build_cmd(move_cmd["action"], move_cmd["params"])
 
         # ==========================================
         # ПРИОРИТЕТ 7: Алхимия и Минирование
@@ -186,25 +188,31 @@ class AlchemyStrategy:
                 closest_cauldron = min(cauldrons, key=lambda c: cls.get_distance(mx, my, c["x"], c["y"]))
                 dist_to_cauldron = cls.get_distance(mx, my, closest_cauldron["x"], closest_cauldron["y"])
 
+                # Выкладываем мину на подступах к котлу (дистанция 1)
                 if dist_to_cauldron == 1:
                     for slot in filled_slots:
                         if inventory[slot] not in EPIC_ELEMENTS:
+                            print(f"[{BOT_ID}] Ставлю защитную ловушку перед котлом.", flush=True)
                             return build_cmd("set_trap", {"element_slot": slot})
 
                 if dist_to_cauldron == 0:
                     return build_cmd("mix", {"slot1": filled_slots[0], "slot2": filled_slots[1]})
 
-                return build_cmd(cls.step_towards(mx, my, closest_cauldron["x"], closest_cauldron["y"])["action"],
-                                 cls.step_towards(mx, my, closest_cauldron["x"], closest_cauldron["y"])["params"])
+                move_cmd = cls.step_towards(mx, my, closest_cauldron["x"], closest_cauldron["y"])
+                return build_cmd(move_cmd["action"], move_cmd["params"])
 
         return build_cmd("wait")
 
 
-# --- СЕТЕВОЙ КЛИЕНТ ---
+# --- СЕТЕВОЙ КЛИЕНТ И ЖИЗНЕННЫЙ ЦИКЛ БОТА ---
 async def start_bot():
     print(f"Запуск гроссмейстерского Python-бота [{BOT_ID}]...", flush=True)
     try:
         async with websockets.connect(ENGINE_URL) as ws:
-            await ws.send(json.dumps({"type": "register", "bot_id": BOT_ID, "icon": BOT_ICON}))
-            ready_msg = await ws.recv()
-            ready_data = json.loads(ready_msg)
+            # Шаг 1: Регистрация
+            register_payload = {
+                "type": "register",
+                "bot_id": BOT_ID,
+                "icon": BOT_ICON
+            }
+            await ws.send(json.dumps(register_payload))
