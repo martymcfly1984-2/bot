@@ -54,7 +54,7 @@ class AlchemyStrategy:
 
     @classmethod
     def decide(cls, state: dict) -> dict:
-        """Максимально продвинутый автомат принятия решений."""
+        """Исправленный автомат принятия решений с рабочим циклом крафта."""
         my_bot = state.get("my_bot", {})
         enemy_bot = state.get("enemy_bot", {})
         game_map = state.get("map", {})
@@ -72,8 +72,11 @@ class AlchemyStrategy:
         memory = my_bot.get("memory") or {}
         last_aggression_tick = memory.get("last_aggression_tick", -100)
 
+        # Переменные инвентаря
         has_free_slot = None in inventory
         filled_slots = [i for i, elem in enumerate(inventory) if elem is not None]
+
+        # Исправлено: извлекаем конкретное одиночное число (индекс), а не весь список
         fake_slots = [i for i in filled_slots if isinstance(inventory[i], str) and "_fake" in inventory[i]]
         has_fake = len(fake_slots) > 0
         has_chaos = "chaos" in inventory
@@ -87,21 +90,26 @@ class AlchemyStrategy:
                 "memory_update": memory
             }
 
+        # Дипломатический блеф
         if current_tick > 0 and current_tick % 45 == 0:
             msg_index = (current_tick // 45) % len(BLUFF_MESSAGES)
             return build_cmd("send_message", {"text": BLUFF_MESSAGES[msg_index]})
 
+        # ПРИОРИТЕТ 1: Уклонение
         if dist_to_enemy <= 2 and ehp > 30:
             escape_move = cls.step_away(mx, my, ex, ey, width, height)
             return build_cmd(escape_move["action"], escape_move["params"])
 
+        # ПРИОРИТЕТ 2: Агрессия
         if dist_to_enemy == 1 and ehp <= 30 and has_free_slot:
             memory["last_aggression_tick"] = current_tick
             return build_cmd("steal")
 
+        # ПРИОРИТЕТ 3: Безопасность (Исправлено: передаем число)
         if has_fake:
-            return build_cmd("set_trap", {"element_slot": fake_slots})
+            return build_cmd("set_trap", {"element_slot": fake_slots[0]})
 
+        # ПРИОРИТЕТ 4: Сохранение рецептов и Бонус Алхимика (ОЧКИ)
         last_recipe = my_bot.get("last_recipe")
         has_stone = "philosophers_stone" in inventory
 
@@ -112,10 +120,12 @@ class AlchemyStrategy:
                     ticks_since_aggression = current_tick - last_aggression_tick
                     if ticks_since_aggression < 10:
                         return build_cmd("wait")
+                    print(f"[{BOT_ID}] Сохраняем рецепт с мультипликатором ×1.5!", flush=True)
                     return build_cmd("save")
                 move_cmd = cls.step_towards(mx, my, lab["x"], lab["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
+        # ПРИОРИТЕТ 5: Саботаж котла Хаосом
         if has_chaos:
             free_cauldrons = [c for c in cells if c.get("type") == "cauldron" and not c.get("blocked", False)]
             if free_cauldrons:
@@ -126,7 +136,8 @@ class AlchemyStrategy:
                 move_cmd = cls.step_towards(mx, my, closest_cauldron["x"], closest_cauldron["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
-        if has_free_slot:
+        # ПРИОРИТЕТ 6: Сбор ресурсов (Исправлено: собираем, только если элементов в инвентаре МЕНЬШЕ 2)
+        if len(filled_slots) < 2 and has_free_slot:
             targets = [c for c in cells if c.get("type") in ["vein", "library"] and c.get("exhausted_ticks", 0) <= 0]
             if targets:
                 closest_target = min(targets, key=lambda c: cls.get_distance(mx, my, c["x"], c["y"]))
@@ -135,17 +146,23 @@ class AlchemyStrategy:
                 move_cmd = cls.step_towards(mx, my, closest_target["x"], closest_target["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
+        # ПРИОРИТЕТ 7: Алхимия и Минирование
         if len(filled_slots) >= 2:
             cauldrons = [c for c in cells if c.get("type") == "cauldron"]
             if cauldrons:
                 closest_cauldron = min(cauldrons, key=lambda c: cls.get_distance(mx, my, c["x"], c["y"]))
                 dist_to_cauldron = cls.get_distance(mx, my, closest_cauldron["x"], closest_cauldron["y"])
-                if dist_to_cauldron == 1:
+
+                # Изменено: минируем проход только если враг подошел близко, чтобы не срывать цикл крафта
+                if dist_to_cauldron == 1 and dist_to_enemy <= 3:
                     for slot in filled_slots:
                         if inventory[slot] not in EPIC_ELEMENTS:
                             return build_cmd("set_trap", {"element_slot": slot})
+
                 if dist_to_cauldron == 0:
-                    return build_cmd("mix", {"slot1": filled_slots, "slot2": filled_slots})
+                    # Исправлено: передаем точные одиночные числовые индексы слотов
+                    return build_cmd("mix", {"slot1": filled_slots[0], "slot2": filled_slots[1]})
+
                 move_cmd = cls.step_towards(mx, my, closest_cauldron["x"], closest_cauldron["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
