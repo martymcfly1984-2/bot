@@ -6,7 +6,7 @@ import websockets
 
 # --- КОНФИГУРАЦИЯ ИЗ ОКРУЖЕНИЯ ---
 ENGINE_URL = os.environ.get("ENGINE_URL", "ws://localhost:8081/ws")
-BOT_ID = os.environ.get("BOT_ID", "player1")
+BOT_ID = os.environ.get("BOT_ID", "Top_of_the_Bot")
 BOT_ICON = os.environ.get("BOT_ICON", "🧙")
 
 # Константы правил игры
