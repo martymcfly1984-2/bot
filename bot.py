@@ -5,18 +5,27 @@ import sys
 import websockets
 
 # --- КОНФИГУРАЦИЯ ИЗ ОКРУЖЕНИЯ ---
-ENGINE_URL = os.environ.get("ENGINE_URL", "ws://engine:8081/ws")
+ENGINE_URL = os.environ.get("ENGINE_URL", "ws://localhost:8081/ws")
 BOT_ID = os.environ.get("BOT_ID", "Top_of_the_Bot")
-BOT_ICON = "🤖"
+BOT_ICON = os.environ.get("BOT_ICON", "🧙")
 
-# Ограничения стихий
+# Константы правил игры
 EPIC_ELEMENTS = ["philosophers_stone", "elixir_of_life", "shadow_soul", "stardust"]
+
+# Пул фраз для психологического и дипломатического блефа
+BLUFF_MESSAGES = [
+    "Кажется, я нашел рецепт Философского Камня...",
+    "Не подходи к центральному котлу, там ловушка!",
+    "Давай мирный крафт? Я не атакую.",
+    "Ого, библиотека дала отличную подсказку.",
+    "У тебя фейк в инвентаре, я видел."
+]
 
 
 class AlchemyStrategy:
     @staticmethod
     def get_distance(x1: int, y1: int, x2: int, y2: int) -> int:
-        """Вычисляет манхэттенское расстояние."""
+        """Вычисляет манхэттенское расстояние между точками."""
         return abs(x1 - x2) + abs(y1 - y2)
 
     @staticmethod
@@ -73,7 +82,6 @@ class AlchemyStrategy:
         fake_slots = [i for i in filled_slots if isinstance(inventory[i], str) and "_fake" in inventory[i]]
         has_fake = len(fake_slots) > 0
         has_chaos = "chaos" in inventory
-
         dist_to_enemy = cls.get_distance(mx, my, ex, ey)
 
         # "Щит территории" базы врага (Раздел 10.2 правил)
@@ -131,7 +139,6 @@ class AlchemyStrategy:
 
                     memory["last_recipe"] = None  # Сдаём рецепт
                     return build_cmd("save")
-
                 move_cmd = cls.step_towards(mx, my, lab["x"], lab["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
@@ -155,10 +162,8 @@ class AlchemyStrategy:
                 # Библиотеки в приоритете, чтобы безопасно вскрывать случайный сид реакций матча
                 targets.sort(key=lambda c: (c.get("type") != "library", cls.get_distance(mx, my, c["x"], c["y"])))
                 closest_target = targets[0]
-
                 if cls.get_distance(mx, my, closest_target["x"], closest_target["y"]) == 0:
                     return build_cmd("collect")
-
                 move_cmd = cls.step_towards(mx, my, closest_target["x"], closest_target["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
