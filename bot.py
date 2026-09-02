@@ -155,24 +155,35 @@ class AlchemyStrategy:
                 move_cmd = cls.step_towards(mx, my, closest_cauldron["x"], closest_cauldron["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
+        # ==========================================
         # 6. Сбор ресурсов с учетом Оккупации (Библиотеки и Жилы)
+        # ==========================================
         if len(filled_slots) < 2 and has_free_slot:
             targets = [c for c in cells if c.get("type") in ["library", "vein"] and c.get("exhausted_ticks", 0) <= 0]
+            # Учитываем оккупацию: игнорируем точки, где стоит враг
             targets = [c for c in targets if not (c["x"] == ex and c["y"] == ey)]
 
             if targets:
-                targets.sort(key=lambda c: (c.get("type") != "library", cls.get_distance(mx, my, c["x"], c["y"])))
+                # ЧЕМПИОНСКАЯ СОРТИРОВКА: Бот выбирает то, что БЛИЖЕ.
+                # Но если библиотека и жила на одинаковом расстоянии, он выберет библиотеку.
+                targets.sort(key=lambda c: (cls.get_distance(mx, my, c["x"], c["y"]), c.get("type") != "library"))
                 closest_target = targets[0]
+
+                # Если уже стоим на объекте — собираем/читаем
                 if cls.get_distance(mx, my, closest_target["x"], closest_target["y"]) == 0:
                     return build_cmd("collect")
+
+                # Иначе делаем шаг к цели
                 move_cmd = cls.step_towards(mx, my, closest_target["x"], closest_target["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
+        # ==========================================
         # 7. Алхимия (Синтез в котле)
+        # ==========================================
         if len(filled_slots) >= 2:
-            # ИСПРАВЛЕНО: Анти-взрывная защита. Если пара в инвентаре уже взрывалась — сливаем один элемент в ловушку
+            # Анти-взрывная защита. Если пара в инвентаре уже взрывалась — сливаем один элемент в ловушку
             current_pair = sorted([inventory[filled_slots[0]], inventory[filled_slots[1]]])
-            if current_pair in memory["failed_recipes"]:
+            if current_pair in memory.get("failed_recipes", []):
                 return build_cmd("set_trap", {"element_slot": filled_slots[0]})
 
             cauldrons = [c for c in cells if c.get("type") == "cauldron"]
@@ -184,21 +195,28 @@ class AlchemyStrategy:
 
                 if dist_to_cauldron == 0:
                     if is_occupied:
-                        return build_cmd("attack")
-                    if dist_to_enemy <= 5:
-                        return build_cmd("wait")  # Защита от Ауры соперничества
+                        return build_cmd("attack")  # Сгоняем врага, если он оккупировал наш котёл
+
+                    # ИСПРАВЛЕНО: Ждем только если враг подошел вплотную (радиус 1),
+                    # чтобы не стоять без дела полматча из-за Ауры соперничества.
+                    if dist_to_enemy <= 1:
+                        return build_cmd("wait")
+
+                        # Жмем крафт!
                     return build_cmd("mix", {"slot1": filled_slots[0], "slot2": filled_slots[1]})
 
-                # ИСПРАВЛЕНО: Защитное минирование активируется ТОЛЬКО при полном инвентаре (3 элемента)
+                # Защитное минирование активируется ТОЛЬКО при полном инвентаре (3 элемента)
                 if dist_to_cauldron == 1 and dist_to_enemy <= 3 and len(filled_slots) == 3:
                     for slot in filled_slots:
                         if inventory[slot] not in EPIC_ELEMENTS:
                             return build_cmd("set_trap", {"element_slot": slot})
 
+                # Если мы еще не на котле — уверенно идем к нему
                 move_cmd = cls.step_towards(mx, my, target_cauldron["x"], target_cauldron["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
         return build_cmd("wait")
+
 
 
 # --- СЕТЕВОЙ КЛИЕНТ (Требование раздела 11.6) ---
