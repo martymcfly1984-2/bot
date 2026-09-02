@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import sys
-import random
 import websockets
 
 # --- КОНФИГУРАЦИЯ ИЗ ОКРУЖЕНИЯ ---
@@ -12,6 +11,15 @@ BOT_ICON = os.environ.get("BOT_ICON", "🧙")
 
 # Константы правил игры
 EPIC_ELEMENTS = ["philosophers_stone", "elixir_of_life", "shadow_soul", "stardust"]
+
+# Пул дезинформации для защиты от listen
+BLUFF_MESSAGES = [
+    "Кажется, я нашел рецепт Философского Камня...",
+    "Не подходи к центральному котлу, там ловушка!",
+    "Давай мирный крафт? Я не атакую.",
+    "Ого, библиотека дала отличную подсказку.",
+    "У тебя фейк в инвентаре, я видел."
+]
 
 
 class AlchemyStrategy:
@@ -46,7 +54,7 @@ class AlchemyStrategy:
 
     @classmethod
     def decide(cls, state: dict) -> dict:
-        """Адаптивный чемпионский автомат принятия решений."""
+        """Адаптивный автомат принятия решений с полной защитой от шпионажа."""
         my_bot = state.get("my_bot", {})
         enemy_bot = state.get("enemy_bot", {})
         game_map = state.get("map", {})
@@ -61,18 +69,16 @@ class AlchemyStrategy:
         cells = game_map.get("cells", [])
         inventory = my_bot.get("inventory", [None, None, None])
 
-        # Восстановление и инициализация расширенной памяти матча
+        # Восстановление приватной памяти между тиками
         memory = my_bot.get("memory") or {}
         if "last_aggression_tick" not in memory:
             memory["last_aggression_tick"] = -100
-        if "failed_recipes" not in memory:
-            memory["failed_recipes"] = []  # База опасных пар этого матча
 
         # Свойства инвентаря
         has_free_slot = None in inventory
         filled_slots = [i for i, elem in enumerate(inventory) if elem is not None]
 
-        # Безопасное обнаружение обманок
+        # Обнаружение обманок
         fake_slots = [i for i in filled_slots if isinstance(inventory[i], str) and "_fake" in inventory[i]]
         has_fake = len(fake_slots) > 0
         has_chaos = "chaos" in inventory
@@ -84,15 +90,12 @@ class AlchemyStrategy:
         if enemy_altar:
             is_enemy_near_base = cls.get_distance(ex, ey, enemy_altar["x"], enemy_altar["y"]) <= 2
 
-        # ДИНАМИЧЕСКАЯ ДЕЗИНФОРМАЦИЯ: Выбираем случайную жилу, чтобы запутать вражеский listen
-        veins = [c for c in cells if c.get("type") == "vein"]
-        fake_target = random.choice(veins) if veins else {"x": 0, "y": 0}
-
+        # Дезинформация (Раздел 8.2) — подменяем мысли динамическими координатами
         fake_thought = {
-            "action_intent": "gather",
+            "action_intent": "flee" if dist_to_enemy <= 4 else "idle",
             "confidence": 0.99,
-            "text": "Пойду соберу ресурсы в другом углу...",
-            "target_location": {"x": fake_target.get("x", 0), "y": fake_target.get("y", 0)}
+            "text": "Убегаю в панике!" if dist_to_enemy <= 4 else "Просто стою, никого не трогаю...",
+            "target_location": {"x": 0, "y": 0}
         }
 
         def build_cmd(action: str, params: dict = None) -> dict:
@@ -104,39 +107,45 @@ class AlchemyStrategy:
                 "fake_thought": fake_thought
             }
 
-        # Самообучение: анализируем результаты предыдущего тика
         server_last_recipe = my_bot.get("last_recipe")
-        if server_last_recipe:
-            used_elements = sorted(server_last_recipe.get("elements", []))
-            if server_last_recipe.get("success"):
-                memory["last_recipe"] = server_last_recipe
-            elif server_last_recipe.get("result") == "explosion":
-                # Запоминаем плохую комбинацию текущего сида, чтобы больше не взрываться
-                if used_elements and used_elements not in memory["failed_recipes"]:
-                    memory["failed_recipes"].append(used_elements)
+        if server_last_recipe and server_last_recipe.get("success"):
+            memory["last_recipe"] = server_last_recipe
 
+        # Проверяем, несем ли мы ценный груз на базу
+        memory_recipe = memory.get("last_recipe")
+        has_valuable_cargo = memory_recipe and memory_recipe.get("success")
+
+        # ==========================================
         # 1. Защита — уклонение от преследования (Вне зоны базы врага)
+        # ==========================================
         if dist_to_enemy <= 2 and (ehp > 30 or is_enemy_near_base):
             escape_move = cls.step_away(mx, my, ex, ey, width, height)
             return build_cmd(escape_move["action"], escape_move["params"])
 
+        # ==========================================
         # 2. Агрессия — кража (steal) у слабого соперника в открытом поле
-        if dist_to_enemy == 1 and ehp <= 30 and has_free_slot and not is_enemy_near_base:
+        # ==========================================
+        # ЧЕМПИОНСКОЕ УЛУЧШЕНИЕ: Запрещено воровать, если несем готовый рецепт (бережем Бонус Алхимика!)
+        if dist_to_enemy == 1 and ehp <= 30 and has_free_slot and not is_enemy_near_base and not has_valuable_cargo:
             memory["last_aggression_tick"] = current_tick  # Сброс Бонуса Алхимика
             return build_cmd("steal")
 
-        # 3. Безопасность — утилизация вражеских фейков в ловушки (Защищено от IndexError)
+        # ==========================================
+        # 3. Безопасность — утилизация вражеских фейков в ловушки (Исправлено от падений)
+        # ==========================================
         if has_fake and fake_slots:
             return build_cmd("set_trap", {"element_slot": fake_slots[0]})
 
+        # ==========================================
         # 4. Экономика — Сохранение рецептов и Бонус Алхимика (×1.5)
-        memory_recipe = memory.get("last_recipe")
+        # ==========================================
         has_stone = "philosophers_stone" in inventory
 
-        if (memory_recipe and memory_recipe.get("success")) or (has_stone and memory_recipe and memory_recipe.get("success")):
+        if has_valuable_cargo or (has_stone and has_valuable_cargo):
             lab = next((c for c in cells if c.get("type") == "lab_table" and c.get("owner") == BOT_ID), None)
             if lab:
                 if cls.get_distance(mx, my, lab["x"], lab["y"]) == 0:
+                    # Выжидаем 10 тиков тишины для Бонуса Алхимика (Пункт 10.4)
                     if current_tick - memory["last_aggression_tick"] < 10:
                         return build_cmd("wait")
 
@@ -145,8 +154,10 @@ class AlchemyStrategy:
                 move_cmd = cls.step_towards(mx, my, lab["x"], lab["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
-        # 5. Диверсия — Саботаж котла Хаосом (ИСПРАВЛЕНО: только если у нас нет готового рецепта!)
-        if has_chaos and not (memory_recipe and memory_recipe.get("success")):
+        # ==========================================
+        # 5. Диверсия — Саботаж котла Хаосом
+        # ==========================================
+        if has_chaos:
             clean_cauldrons = [c for c in cells if c.get("type") == "cauldron" and not c.get("blocked", False)]
             if clean_cauldrons:
                 closest_cauldron = min(clean_cauldrons, key=lambda c: cls.get_distance(mx, my, c["x"], c["y"]))
@@ -156,36 +167,25 @@ class AlchemyStrategy:
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
         # ==========================================
-        # 6. Сбор ресурсов с учетом Оккупации (Библиотеки и Жилы)
+        # 6. Сбор ресурсов (Умная чемпионская сортировка по расстоянию)
         # ==========================================
         if len(filled_slots) < 2 and has_free_slot:
             targets = [c for c in cells if c.get("type") in ["library", "vein"] and c.get("exhausted_ticks", 0) <= 0]
-            # Учитываем оккупацию: игнорируем точки, где стоит враг
             targets = [c for c in targets if not (c["x"] == ex and c["y"] == ey)]
 
             if targets:
-                # ЧЕМПИОНСКАЯ СОРТИРОВКА: Бот выбирает то, что БЛИЖЕ.
-                # Но если библиотека и жила на одинаковом расстоянии, он выберет библиотеку.
+                # Берем то, что ближе! Но при равенстве дистанции выберем библиотеку
                 targets.sort(key=lambda c: (cls.get_distance(mx, my, c["x"], c["y"]), c.get("type") != "library"))
                 closest_target = targets[0]
-
-                # Если уже стоим на объекте — собираем/читаем
                 if cls.get_distance(mx, my, closest_target["x"], closest_target["y"]) == 0:
                     return build_cmd("collect")
-
-                # Иначе делаем шаг к цели
                 move_cmd = cls.step_towards(mx, my, closest_target["x"], closest_target["y"])
                 return build_cmd(move_cmd["action"], move_cmd["params"])
 
         # ==========================================
-        # 7. Алхимия (Синтез в котле)
+        # 7. Алхимия (Синтез в котле) — Исправлен избыточный страх
         # ==========================================
         if len(filled_slots) >= 2:
-            # Анти-взрывная защита. Если пара в инвентаре уже взрывалась — сливаем один элемент в ловушку
-            current_pair = sorted([inventory[filled_slots[0]], inventory[filled_slots[1]]])
-            if current_pair in memory.get("failed_recipes", []):
-                return build_cmd("set_trap", {"element_slot": filled_slots[0]})
-
             cauldrons = [c for c in cells if c.get("type") == "cauldron"]
             if cauldrons:
                 cauldrons.sort(key=lambda c: (c.get("blocked", False), cls.get_distance(mx, my, c["x"], c["y"])))
@@ -195,14 +195,12 @@ class AlchemyStrategy:
 
                 if dist_to_cauldron == 0:
                     if is_occupied:
-                        return build_cmd("attack")  # Сгоняем врага, если он оккупировал наш котёл
+                        return build_cmd("attack")  # Прогоняем врага, если он оккупировал котёл
 
-                    # ИСПРАВЛЕНО: Ждем только если враг подошел вплотную (радиус 1),
-                    # чтобы не стоять без дела полматча из-за Ауры соперничества.
+                    # ИСПРАВЛЕНО: Замираем, только если враг вплотную (dist == 1)
                     if dist_to_enemy <= 1:
                         return build_cmd("wait")
 
-                        # Жмем крафт!
                     return build_cmd("mix", {"slot1": filled_slots[0], "slot2": filled_slots[1]})
 
                 # Защитное минирование активируется ТОЛЬКО при полном инвентаре (3 элемента)
