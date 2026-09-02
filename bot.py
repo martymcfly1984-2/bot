@@ -6,7 +6,7 @@ import random
 import websockets
 
 # --- КОНФИГУРАЦИЯ ИЗ ОКРУЖЕНИЯ ---
-ENGINE_URL = os.environ.get("ENGINE_URL", "ws://engine:8081/ws")
+ENGINE_URL = os.environ.get("ENGINE_URL", "ws://localhost:8081/ws")
 BOT_ID = os.environ.get("BOT_ID", "Top_of_the_Bot")
 BOT_ICON = os.environ.get("BOT_ICON", "🧙")
 
